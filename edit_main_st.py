@@ -1,10 +1,8 @@
-
 import os
 import psycopg2
 import pandas as pd
 import streamlit as st
 from dotenv import load_dotenv
-import streamlit as st
 
 load_dotenv()
 DB_URL = os.getenv("DB_URL")
@@ -20,11 +18,9 @@ with st.sidebar:
     st.warning("Database Connection Management")
     if st.button("🔴 Kill All Active Connections"):
         try:
-            # We use a fresh connection just for this command
             conn = psycopg2.connect(DB_URL)
-            conn.autocommit = True  # Required for termination commands
+            conn.autocommit = True
             with conn.cursor() as cur:
-                # Note: We use your specific database name from the error message
                 kill_query = """
                 SELECT pg_terminate_backend(pid)
                 FROM pg_stat_activity
@@ -37,29 +33,48 @@ with st.sidebar:
         except Exception as e:
             st.sidebar.error(f"Could not reset: {e}")
 
-# 1. Load Data
+# 1. Load Data (Including last_completed_at)
 @st.cache_data(show_spinner=False)
 def load_data():
     conn = get_connection()
-    query = "SELECT id, reminder, reminder_date_arg_tz, activated FROM my_schema_1.reminders ORDER BY id ASC;"
+    query = """
+    SELECT id, reminder, activated, chat_id, frequency, 
+           day_of_week, day_value, month_value, year_value, 
+           hour_value, minute_value, last_completed_at
+    FROM my_schema_1.reminders 
+    ORDER BY id ASC;
+    """
     df = pd.read_sql(query, conn)
     conn.close()
     return df
 
-# Initialize Data in State
 if "df" not in st.session_state:
     st.session_state.df = load_data()
 
 # 2. The Data Editor
-# We disable editing the 'id' column because it is managed by Postgres (Serial)
 st.subheader("Edit Reminders")
 edited_data = st.data_editor(
     st.session_state.df,
     num_rows="dynamic",
     column_config={
         "id": st.column_config.NumberColumn("ID", disabled=True),
-        "activated": st.column_config.CheckboxColumn("Activated"),
-        "reminder_date_arg_tz": st.column_config.DatetimeColumn("Reminder Date")
+        "activated": st.column_config.CheckboxColumn("Active"),
+        "reminder": st.column_config.TextColumn("Message", required=True),
+        "chat_id": st.column_config.TextColumn("Telegram Chat ID"),
+        "frequency": st.column_config.SelectboxColumn(
+            "Frequency", 
+            options=["daily", "weekly", "monthly", "yearly", "once"]
+        ),
+        "day_of_week": st.column_config.SelectboxColumn(
+            "Weekday", 
+            options=["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+        ),
+        "day_value": st.column_config.NumberColumn("Day (1-31)", min_value=1, max_value=31),
+        "month_value": st.column_config.NumberColumn("Month (1-12)", min_value=1, max_value=12),
+        "year_value": st.column_config.NumberColumn("Year (YYYY)"),
+        "hour_value": st.column_config.NumberColumn("Hour (0-23)", min_value=0, max_value=23),
+        "minute_value": st.column_config.NumberColumn("Minute (0-59)", min_value=0, max_value=59),
+        "last_completed_at": st.column_config.DatetimeColumn("Last completed at"),
     },
     key="editor_key",
     use_container_width=True
@@ -67,9 +82,7 @@ edited_data = st.data_editor(
 
 # 3. Handle Changes
 if st.button("Save Changes"):
-    # This dictionary tracks exactly what the user changed in the UI
     changes = st.session_state.editor_key
-    
     conn = get_connection()
     cur = conn.cursor()
     
@@ -78,7 +91,6 @@ if st.button("Save Changes"):
         for row_index, updated_values in changes["edited_rows"].items():
             row_id = st.session_state.df.iloc[row_index]["id"]
             for col, val in updated_values.items():
-                # Note: Using f-string for column name is safe here as it's from our DB schema
                 sql = f"UPDATE my_schema_1.reminders SET {col} = %s WHERE id = %s"
                 cur.execute(sql, (val, int(row_id)))
 
@@ -90,14 +102,29 @@ if st.button("Save Changes"):
         # Handle ADDITIONS
         for row in changes["added_rows"]:
             cur.execute(
-                "INSERT INTO my_schema_1.reminders (reminder, reminder_date_arg_tz, activated) VALUES (%s, %s, %s)",
-                (row.get("reminder"), row.get("reminder_date_arg_tz"), row.get("activated", True))
+                """
+                INSERT INTO my_schema_1.reminders 
+                (reminder, activated, chat_id, frequency, day_of_week, 
+                 day_value, month_value, year_value, hour_value, minute_value, last_completed_at) 
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    row.get("reminder", "New Reminder"), 
+                    row.get("activated", True),
+                    row.get("chat_id"),
+                    row.get("frequency", "daily"),
+                    row.get("day_of_week"),
+                    row.get("day_value"),
+                    row.get("month_value"),
+                    row.get("year_value"),
+                    row.get("hour_value", 9),
+                    row.get("minute_value", 0),
+                    None # last_completed_at starts as Null for new entries
+                )
             )
 
         conn.commit()
         st.success("Successfully updated database!")
-        
-        # Clear cache and state to refresh data from DB
         st.cache_data.clear()
         st.session_state.df = load_data()
         st.rerun()
