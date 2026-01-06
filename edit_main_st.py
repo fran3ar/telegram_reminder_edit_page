@@ -110,7 +110,7 @@ if st.button("Save Changes"):
                 """,
                 (
                     row.get("reminder", "New Reminder"), 
-                    row.get("activated", True),
+                    row.get("activated", False),
                     row.get("chat_id"),
                     row.get("frequency", "daily"),
                     row.get("day_of_week"),
@@ -119,7 +119,7 @@ if st.button("Save Changes"):
                     row.get("year_value"),
                     row.get("hour_value", 9),
                     row.get("minute_value", 0),
-                    None # last_completed_at starts as Null for new entries
+                    row.get("last_completed_at", '1999-01-01 00:00:00'),
                 )
             )
 
